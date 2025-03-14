@@ -1,0 +1,20 @@
+{
+  "streams": [
+    {
+      "stream": {
+        "name": "topic",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "topic_name": {
+              "type": "string"
+            }
+          }
+        },
+        "supported_sync_modes": ["full_refresh"]
+      },
+      "sync_mode": "full_refresh",
+      "destination_sync_mode": "overwrite"
+    }
+  ]
+}
