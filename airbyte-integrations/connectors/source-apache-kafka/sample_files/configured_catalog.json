@@ -2,11 +2,14 @@
   "streams": [
     {
       "stream": {
-        "name": "topic",
+        "name": "testy.mctesterson",
         "json_schema": {
           "type": "object",
           "properties": {
-            "topic_name": {
+            "key": {
+              "type": "string"
+            },
+            "value": {
               "type": "string"
             }
           }

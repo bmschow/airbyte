@@ -19,6 +19,8 @@ python = "^3.10,<3.12"
 airbyte-cdk = "^6.33.0"
 confluent-kafka = "2.4.0"
 mockafka-py = "^0.1.63"
+pytest = "^8.3.5"
+freezegun = "^1.5.1"
 
 
 [tool.poetry.scripts]
