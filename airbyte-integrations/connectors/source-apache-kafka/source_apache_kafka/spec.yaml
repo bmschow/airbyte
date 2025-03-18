@@ -1,0 +1,14 @@
+documentationUrl: https://docsurl.com
+connectionSpecification:
+  $schema: http://json-schema.org/draft-07/schema#
+  title: Apache Kafka Spec
+  type: object
+  required:
+    - bootstrap_servers
+  properties:
+    bootstrap_servers:
+      type: string
+      description: kafka bootstrap servers as a comma seperated list
+      examples:
+        - "localhost:9092;localhost:9093"
+
