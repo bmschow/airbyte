@@ -4,11 +4,10 @@ import logging
 from airbyte_cdk.sources import AbstractSource
 from airbyte_cdk.sources.streams import Stream
 from airbyte_cdk.sources.streams.core import package_name_from_class
-from airbyte_cdk.models import SyncMode, AirbyteMessage, AirbyteCatalog
+from airbyte_cdk.models import SyncMode, AirbyteMessage, AirbyteCatalog, AirbyteStateMessage, AirbyteStateType, AirbyteStreamState, StreamDescriptor, AirbyteStateBlob, Type
 from airbyte_cdk.sources.utils.schema_helpers import ResourceSchemaLoader
 
-from time import sleep
-
+import time
 import confluent_kafka
 from mockafka import FakeConsumer
 
@@ -77,9 +76,11 @@ class Topic(Stream):
         topic_metadata = admin_client.list_topics().topics[self.name]
         partitions = topic_metadata.partitions
         
-        # Initialize partition states from stream state
-        if stream_state and 'partitions' in stream_state:
-            self._partition_states = stream_state['partitions']
+        if stream_state and isinstance(stream_state, dict):
+            if 'partitions' in stream_state:
+                self._partition_states = stream_state['partitions']
+            else:
+                logger.warning(f"Stream state missing 'partitions' key: {stream_state}")
         
         # Get the number of partitions
         num_partitions = len(partitions)
@@ -88,12 +89,11 @@ class Topic(Stream):
             # Get last offset for this partition from state
             last_offset = int(self._partition_states.get(str(partition_id), confluent_kafka.OFFSET_BEGINNING))
             
-            if sync_mode == SyncMode.incremental:
-                # For incremental sync, start from last offset
-                current_offset = last_offset
+            if sync_mode == SyncMode.incremental and last_offset != confluent_kafka.OFFSET_BEGINNING:
+                # For incremental sync, start from last offset + 1 to avoid rereading the last message
+                current_offset = last_offset + 1
             else:
-                # For full refresh, start from beginning
-                current_offset = 0
+                current_offset = confluent_kafka.OFFSET_BEGINNING
             
             # Create a slice for this partition
             yield {
@@ -156,6 +156,9 @@ class Topic(Stream):
         
         try:
             message = consumer.poll(timeout=3)
+            messages_read = 0
+            last_state_emit = 0
+            
             while message:
                 current_offset = message.offset()
                 if current_offset >= end_offset:
@@ -171,13 +174,45 @@ class Topic(Stream):
                 }
                 # Update state for this partition
                 self._partition_states[str(partition)] = current_offset
+                messages_read += 1
+                
+                # Emit state message every state_checkpoint_interval messages
+                if messages_read - last_state_emit >= self.state_checkpoint_interval:
+                    yield AirbyteMessage(
+                        type=Type.STATE,
+                        state=AirbyteStateMessage(
+                            type=AirbyteStateType.STREAM,
+                            stream=AirbyteStreamState(
+                                stream_descriptor=StreamDescriptor(name=self.name),
+                                stream_state=AirbyteStateBlob(self.state)
+                            ),
+                        )
+                    )
+                    last_state_emit = messages_read
+                
                 message = consumer.poll(timeout=3)
+            
+            # Always emit final state at the end of the read
+            if messages_read > 0:  # Only emit if we read any messages
+                yield AirbyteMessage(
+                    type=Type.STATE,
+                    state=AirbyteStateMessage(
+                        type=AirbyteStateType.STREAM,
+                        stream=AirbyteStreamState(
+                            stream_descriptor=StreamDescriptor(name=self.name),
+                            stream_state=AirbyteStateBlob(self.state)
+                        ),
+                    )
+                )
         finally:
             consumer.close()
 
 def get_offset(sync_mode: SyncMode, stream_state):
     if sync_mode == SyncMode.incremental:
-        raise NotImplemented("Need to implement")
+        if stream_state and 'partitions' in stream_state:
+            # For incremental sync, use the last offset from state
+            return max(int(offset) for offset in stream_state['partitions'].values())
+        return confluent_kafka.OFFSET_BEGINNING
     if sync_mode == SyncMode.full_refresh:
         return confluent_kafka.OFFSET_BEGINNING
     raise AssertionError("Configuration not supported for offset seeking")
