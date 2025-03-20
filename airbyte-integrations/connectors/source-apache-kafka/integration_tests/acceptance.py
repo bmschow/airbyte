@@ -13,7 +13,7 @@ from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 import time
 from typing import Optional
-
+import logging
 import sys
 print(sys.executable)
 
@@ -21,6 +21,8 @@ print(sys.executable)
 
 TEST_TOPIC = 'acceptance.test.topic'
 BOOTSTRAP_SERVERS = 'localhost:9092'
+
+logger = logging.getLogger("airbyte")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -182,3 +184,57 @@ def test_read_sequential_slices():
     partition1_messages = [r for r in output1.records + output2.records if r.record.data['key'] == "partition_1"]
     assert len(partition0_messages) == 4, "Should have 4 messages in partition 0"
     assert len(partition1_messages) == 4, "Should have 4 messages in partition 1"
+
+
+def test_discover_method():
+    print('setting up topics for discover test...')
+    admin_client = AdminClient({"bootstrap.servers": BOOTSTRAP_SERVERS})
+    
+    test_topics = ['discover.test.topic1', 'discover.test.topic2', 'discover.test.topic3']
+    internal_topic = '_internal.topic'  # This should be filtered out
+    default_topic = 'default_ksql_processing_log'  # Auto-created by Kafka
+    
+    # Delete topics if they exist
+    try:
+        admin_client.delete_topics(test_topics + [internal_topic, default_topic])
+        wait_for_kafka_ready(admin_client)
+    except Exception:
+        pass
+    
+    # Create topics and wait for them to be ready
+    admin_client.create_topics([NewTopic(topic, num_partitions=1) for topic in test_topics + [internal_topic]])
+    for topic in test_topics + [internal_topic]:
+        if not wait_for_kafka_ready(admin_client, topic=topic):
+            raise Exception(f"Topic {topic} failed to become ready within timeout period")
+    
+    config = {
+        "bootstrap_servers": "localhost:9092"
+        # Note: No topics specified in config - discover should find them automatically
+    }
+    
+    source = SourceApacheKafka()
+    catalog = source.discover(logger, config)
+    
+    # Verify we got a stream for each non-internal topic
+    assert len(catalog.streams) == 3, f"Expected 3 streams, got {len(catalog.streams)}"
+    
+    # Verify each stream has the correct name and schema
+    discovered_topics = set()
+    for stream in catalog.streams:
+        assert stream.name in test_topics, f"Unexpected stream name: {stream.name}"
+        discovered_topics.add(stream.name)
+        
+        # Verify internal topic and default topic were not included
+        assert stream.name != internal_topic, "Internal topic should not be discovered"
+        assert stream.name != default_topic, "Default KSQL topic should not be discovered"
+        
+        # Verify schema matches topic.json
+        schema = stream.json_schema
+        assert "properties" in schema, "Schema should have properties"
+        assert "key" in schema["properties"], "Schema should have key field"
+        assert "value" in schema["properties"], "Schema should have value field"
+        assert "offset" in schema["properties"], "Schema should have offset field"
+        assert "partition" in schema["properties"], "Schema should have partition field"
+    
+    # Verify we discovered all non-internal topics
+    assert discovered_topics == set(test_topics), "Not all topics were discovered"

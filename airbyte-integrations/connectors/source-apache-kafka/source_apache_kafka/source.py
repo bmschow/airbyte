@@ -33,11 +33,40 @@ class SourceApacheKafka(AbstractSource):
         """Implements the Discover operation from the Airbyte Specification.
         See https://docs.airbyte.com/understanding-airbyte/airbyte-protocol/#discover.
         """
-        streams = [stream.as_airbyte_stream() for stream in self.streams(config=config)]
-        return AirbyteCatalog(streams=streams)
+        kafka_consumer_config = get_consumer_config(config)
+        consumer = confluent_kafka.Consumer(kafka_consumer_config)
+        
+        try:
+            # Get cluster metadata which includes topic information
+            cluster_metadata = consumer.list_topics(timeout=10)
+            all_topics = list(cluster_metadata.topics.keys())
+            
+            # Filter out internal topics (those starting with _ or __)
+            available_topics = [topic for topic in all_topics if not topic.startswith('_')]
+            
+            if not available_topics:
+                logger.warning("No topics found in Kafka cluster")
+                return AirbyteCatalog(streams=[])
+            
+            logger.info(f"Discovered {len(available_topics)} topics: {available_topics}")
+            streams = [stream.as_airbyte_stream() for stream in self.streams(config, available_topics)]
+            return AirbyteCatalog(streams=streams)
+        finally:
+            # Make sure to close the consumer
+            consumer.close()
 
-    def streams(self, config: Mapping[str, Any]) -> List[Stream]:
-        return [Topic(topic_name, config) for topic_name in config['topics'].split(',')]
+    def streams(self, config: Mapping[str, Any], available_topics: List[str] = None) -> List[Stream]:
+        """Returns a list of stream instances.
+        
+        Args:
+            config: The user-supplied configuration
+            available_topics: Optional list of topics from discover. If not provided, uses topics from config.
+        """
+        if available_topics is None:
+            # Fall back to config-specified topics if available_topics not provided
+            available_topics = config['topics'].split(',') if 'topics' in config else []
+        
+        return [Topic(topic_name, config) for topic_name in available_topics]
 
 def get_consumer_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     consumer_config = {

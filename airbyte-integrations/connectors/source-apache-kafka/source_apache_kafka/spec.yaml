@@ -5,10 +5,55 @@ connectionSpecification:
   type: object
   required:
     - bootstrap_servers
+    - topics
   properties:
     bootstrap_servers:
       type: string
-      description: kafka bootstrap servers as a comma seperated list
+      description: Kafka bootstrap servers as a comma separated list
       examples:
-        - "localhost:9092;localhost:9093"
+        - "localhost:9092,localhost:9093"
+    topics:
+      type: string
+      description: Comma-separated list of topics to read from
+      examples:
+        - "topic1,topic2,topic3"
+    group_id:
+      type: string
+      description: Consumer group ID. If not provided, defaults to 'airbyte_group'
+      examples:
+        - "my_consumer_group"
+    security_protocol:
+      type: string
+      description: Protocol used to communicate with brokers. Special value 'MSK_IAM' enables AWS MSK IAM authentication
+      enum:
+        - "PLAINTEXT"
+        - "SSL"
+        - "SASL_PLAINTEXT"
+        - "SASL_SSL"
+        - "MSK_IAM"
+    iam_aws_region:
+      type: string
+      description: AWS region for MSK IAM authentication. Required when security_protocol is 'MSK_IAM'
+      examples:
+        - "us-east-1"
+    sasl_mechanism:
+      type: string
+      description: SASL mechanism to use for authentication
+      enum:
+        - "PLAIN"
+        - "GSSAPI"
+        - "SCRAM-SHA-256"
+        - "SCRAM-SHA-512"
+        - "OAUTHBEARER"
+  dependencies:
+    security_protocol:
+      oneOf:
+        - properties:
+            security_protocol:
+              const: "MSK_IAM"
+          required: ["iam_aws_region"]
+        - properties:
+            security_protocol:
+              not:
+                const: "MSK_IAM"
 

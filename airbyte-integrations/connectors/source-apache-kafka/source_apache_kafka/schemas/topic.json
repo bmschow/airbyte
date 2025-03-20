@@ -13,6 +13,14 @@
         "null",
         "string"
       ]
+    },
+    "offset": {
+      "type": "integer",
+      "description": "The offset position of the message in the partition"
+    },
+    "partition": {
+      "type": "integer",
+      "description": "The partition number from which the message was read"
     }
   }
 }
