@@ -18,13 +18,7 @@ logger = logging.getLogger("airbyte")
 class SourceApacheKafka(AbstractSource):
     def check_connection(self, logger, config) -> Tuple[bool, any]:
         logger.info("Checking connection to kafka bootstrap servers...")
-        kafka_consumer_config = {
-            "auto.offset.reset": "earliest",
-            "bootstrap.servers": config['bootstrap_servers'],
-            "group.id": 'test_group',
-            "enable.auto.commit": False,
-            "logger": logger
-        }
+        kafka_consumer_config = get_consumer_config(config)
 
         try:
             consumer = confluent_kafka.Consumer(kafka_consumer_config)
@@ -44,6 +38,32 @@ class SourceApacheKafka(AbstractSource):
 
     def streams(self, config: Mapping[str, Any]) -> List[Stream]:
         return [Topic(topic_name, config) for topic_name in config['topics'].split(',')]
+
+def get_consumer_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
+    consumer_config = {
+        "auto.offset.reset": "earliest",
+        "bootstrap.servers": config['bootstrap_servers'],
+        "group.id": config.get('group_id') or 'airbyte_group',
+        "enable.auto.commit": False,
+        "logger": logger
+    }
+
+    if config.get('security_protocol'):
+        if config['security_protocol'] == 'MSK_IAM':
+            def msk_iam_oauth_callback(oauth_config):
+                from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
+                aws_region = config['iam_aws_region']
+                auth_token, expiry_ms = MSKAuthTokenProvider.generate_auth_token(aws_region)
+                return auth_token, expiry_ms / 1000
+            consumer_config['security.protocol'] = 'SASL_SSL'
+            consumer_config['sasl.mechanisms'] = 'OAUTHBEARER'
+            consumer_config['oauth_cb'] = msk_iam_oauth_callback
+        else:
+            consumer_config['security.protocol'] = config['security_protocol']
+    if config.get('sasl_mechanism'):
+        consumer_config['sasl.mechanisms'] = config['sasl_mechanism']
+        
+    return consumer_config
 
 
 class Topic(Stream):
@@ -105,17 +125,8 @@ class Topic(Stream):
     def get_json_schema(self) -> Mapping[str, Any]:
         return ResourceSchemaLoader(package_name_from_class(self.__class__)).get_schema('topic')
 
-    def get_consumer(self, sync_mode):
-        if self.config.get('is_test'):
-            logger.warning("`is_test` is true, using FakeConsumer for testing")
-            return FakeConsumer()
-        kafka_consumer_config = {
-            "auto.offset.reset": 'earliest',
-            "bootstrap.servers": self.config['bootstrap_servers'],
-            "group.id": 'test_group',
-            "enable.auto.commit": False,
-            "logger": logger
-        }
+    def get_consumer(self):
+        kafka_consumer_config = get_consumer_config(self.config)
         logger.info("CONSUMER CONFIG")
         logger.info(kafka_consumer_config)
         return confluent_kafka.Consumer(kafka_consumer_config)
@@ -138,7 +149,7 @@ class Topic(Stream):
             stream_state: Optional[Mapping[str, Any]] = None,
     ) -> Iterable[StreamData]:
         logger.info("Getting consumer")
-        consumer = self.get_consumer(sync_mode)
+        consumer = self.get_consumer()
         
         partition = stream_slice.get("partition")
         start_offset = stream_slice.get("start_offset", confluent_kafka.OFFSET_BEGINNING)

@@ -21,6 +21,7 @@ confluent-kafka = "2.4.0"
 mockafka-py = "^0.1.63"
 pytest = "^8.3.5"
 freezegun = "^1.5.1"
+aws-msk-iam-sasl-signer-python = "^1.0.2"
 
 
 [tool.poetry.scripts]
